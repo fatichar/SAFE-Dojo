@@ -6,6 +6,7 @@ open Fable
 open Fable.Core.JsInterop
 open Fable.Helpers.React
 open Fable.Helpers.React.Props
+//open Fable.Import.Browser
 open Fable.PowerPack
 open Fable.Recharts
 open Fable.Recharts.Props
@@ -23,7 +24,8 @@ open Shared
 /// The different elements of the completed report.
 type Report =
     { Location : LocationResponse
-      Crimes : CrimeResponse array }
+      Crimes : CrimeResponse array 
+      Weather : WeatherResponse  }
 
 type ServerState = Idle | Loading | ServerError of string
 
@@ -37,9 +39,11 @@ type Model =
 /// The different types of messages in the system.
 type Msg =
     | GetReport
+    | GetReportByPost
     | PostcodeChanged of string
     | GotReport of Report
     | ErrorMsg of exn
+    | ClearAll
 
 /// The init function is called to start the message pump with an initial view.
 let init () = 
@@ -48,21 +52,46 @@ let init () =
       ValidationError = None
       ServerState = Idle }, Cmd.ofMsg (PostcodeChanged "")
 
+let getResponseByPost postcode = promise {
+    Fable.Import.Browser.console.log ("Sending Postcode = " + postcode)
+    let! locationResponse = Fetch.postRecord "/api/distance" { PostCode = postcode } []
+    let! crimesResponse   = Fetch.postRecord "api/crime" { PostCode = postcode } []
+    let! weatherResponse  = Fetch.postRecord "/api/weather" { PostCode = postcode } []
+    //let! weather = Fetch.fetchAs<WeatherResponse> (sprintf "/api/weather/%s" postcode) []
+
+    let! location     = locationResponse.json<LocationResponse>()
+    let! crimes       = crimesResponse.json<CrimeResponse array>()
+    let! weather      = weatherResponse.json<WeatherResponse>()
+    
+    printfn "Response = %A+" weather.WeatherType
+
+    Fable.Import.Browser.console.log ("Received:\n\tWeatherTye = " + weather.WeatherType.ToString())
+    Fable.Import.Browser.console.log ("Abbreviation = " + weather.WeatherType.Abbreviation)
+    
+    
+    return { Location = location; Crimes = crimes; Weather = weather } }
+
+
 let getResponse postcode = promise {
     let! location = Fetch.fetchAs<LocationResponse> (sprintf "/api/distance/%s" postcode) []
     let! crimes = Fetch.tryFetchAs<CrimeResponse array> (sprintf "api/crime/%s" postcode) [] |> Promise.map (Result.defaultValue [||])
+    let! weather = Fetch.fetchAs<WeatherResponse> (sprintf "/api/weather/%s" postcode) []
     
+    Fable.Import.Browser.console.log (sprintf "Received Weather = %A" weather)
     (* Task 4.5 WEATHER: Fetch the weather from the API endpoint you created.
        Then, save its value into the Report below. You'll need to add a new
        field to the Report type first, though! *)
-    return { Location = location; Crimes = crimes } }
+    return { Location = location; Crimes = crimes; Weather = weather } }
  
 /// The update function knows how to update the model given a message.
 let update msg model =
     match model, msg with
     | { ValidationError = None; Postcode = postcode }, GetReport ->
         { model with ServerState = Loading }, Cmd.ofPromise getResponse postcode GotReport ErrorMsg
+    | { ValidationError = None; Postcode = postcode }, GetReportByPost ->
+        { model with ServerState = Loading }, Cmd.ofPromise getResponseByPost postcode GotReport ErrorMsg
     | _, GetReport -> model, Cmd.none
+    | _, GetReportByPost -> model, Cmd.none
     | _, GotReport response ->
         { model with
             ValidationError = None
@@ -70,12 +99,14 @@ let update msg model =
             ServerState = Idle }, Cmd.none
     | _, PostcodeChanged p ->
         let p = p.ToUpper()
+        let valid = Validation.validatePostcode p
         { model with
             Postcode = p
             (* Task 2.2 Validation. Use the Validation.validatePostcode function to implement client-side form validation.
-               Note that the validation is the same shared code that runs on the server! *)
-            ValidationError = None }, Cmd.none
+                Note that the validation is the same shared code that runs on the server! *)
+            ValidationError = if valid then None else if p = null || p = "" then Some "Please enter Post Code" else Some "Invalid Post Code" }, Cmd.none
     | _, ErrorMsg e -> { model with ServerState = ServerError e.Message }, Cmd.none
+    | _, ClearAll -> init()
 
 [<AutoOpen>]
 module ViewParts =
@@ -112,6 +143,7 @@ module ViewParts =
                 Style [ Height 410; Width 810 ]
                 (* Task 3.1 MAPS: Use the getBingMapUrl function to build a valid maps URL using the supplied LatLong.
                    You can use it to add a Src attribute to this iframe. *)
+                Src (getBingMapUrl latLong)
             ] [ ]
         ]
 
@@ -129,7 +161,7 @@ module ViewParts =
                             Heading.h3 [ Heading.Is4; Heading.Props [ Style [ Width "100%" ] ] ] [
                                 (* Task 4.4 WEATHER: Get the temperature from the given weather report
                                    and display it here instead of an empty string. *)
-                                str ""
+                                str ("Avg Temp: " + weatherReport.AverageTemperature.ToString())
                             ]
                         ]
                     ]
@@ -158,34 +190,51 @@ let view model dispatch =
             yield 
                 Field.div [] [
                     Label.label [] [ str "Postcode" ]
-                    Control.div [ Control.HasIconLeft; Control.HasIconRight ] [
-                        Input.text
-                            [ Input.Placeholder "Ex: EC2A 4NE"
-                              Input.Value model.Postcode
-                              Input.Color (if model.ValidationError.IsSome then Color.IsDanger else Color.IsSuccess)
-                              Input.Props [ OnChange (fun ev -> dispatch (PostcodeChanged !!ev.target?value)); onKeyDown KeyCode.enter (fun _ -> dispatch GetReport) ] ]
-                        Icon.faIcon [ Icon.Size IsSmall; Icon.IsLeft ] [ Fa.icon Fa.I.Building ]
-                        (match model with
-                         | { ValidationError = Some _ } -> Icon.faIcon [ Icon.Size IsSmall; Icon.IsRight ] [ Fa.icon Fa.I.Exclamation ]
-                         | { ValidationError = None } -> Icon.faIcon [ Icon.Size IsSmall; Icon.IsRight ] [ Fa.icon Fa.I.Check ])
+                    Level.left [ ] [
+                        Level.item [] [
+                            Control.div [ Control.HasIconLeft; Control.HasIconRight; ] [
+                                Input.text [ 
+                                        Input.Placeholder "Ex: EC2A 4NE"
+                                        Input.Value model.Postcode
+                                        Input.Color (if model.ValidationError.IsSome then Color.IsDanger else Color.IsSuccess)
+                                        Input.Props [ OnChange (fun ev -> dispatch (PostcodeChanged !!ev.target?value)); onKeyDown KeyCode.enter (fun _ -> dispatch GetReport) ] ]
+                                    
+                                Icon.faIcon [ Icon.Size IsSmall; Icon.IsLeft ] [ Fa.icon Fa.I.Building ]
+
+                                (match model with
+                                    | { ValidationError = Some _ } -> Icon.faIcon [ Icon.Size IsSmall; Icon.IsRight ] [ Fa.icon Fa.I.Exclamation ]
+                                    | { ValidationError = None } -> Icon.faIcon [ Icon.Size IsSmall; Icon.IsRight ] [ Fa.icon Fa.I.Check ])
+                            ]
+                        ]
+                        Level.item [] [
+                            Button.button [
+                                    Button.Color IsPrimary
+                                    Button.OnClick (fun _ -> dispatch GetReport)
+                                    Button.Disabled (model.ValidationError.IsSome)
+                                    Button.IsLoading (model.ServerState = ServerState.Loading) ]
+                                [ str "Get" ]
+                        ]
+                        Level.item [] [
+                            Button.button [
+                                    Button.Color IsPrimary
+                                    Button.OnClick (fun _ -> dispatch GetReportByPost)
+                                    Button.Disabled (model.ValidationError.IsSome)
+                                    Button.IsLoading (model.ServerState = ServerState.Loading) ]
+                                [ str "Post" ]
+                        ]
+                        Level.item [] [
+                            Button.button [ 
+                                    Button.OnClick (fun _ -> dispatch ClearAll; dispatch GetReport)
+                                    Button.Disabled (match model.Postcode with
+                                                        | null -> true
+                                                        | ""   -> true
+                                                        | _    -> false) ]
+                                [ str "Clear" ]
+                        ]
                     ]
                     Help.help
                        [ Help.Color (if model.ValidationError.IsNone then IsSuccess else IsDanger) ]
                        [ str (model.ValidationError |> Option.defaultValue "") ]
-                ]
-            yield
-                Field.div [ Field.IsGrouped ] [
-                    Level.level [ ] [
-                        Level.left [] [
-                            Level.item [] [
-                                Button.button
-                                    [ Button.IsFullwidth
-                                      Button.Color IsPrimary
-                                      Button.OnClick (fun _ -> dispatch GetReport)
-                                      Button.Disabled (model.ValidationError.IsSome)
-                                      Button.IsLoading (model.ServerState = ServerState.Loading) ]
-                                    [ str "Submit" ] ] ] ]
-
                 ]
 
             match model with
@@ -213,11 +262,12 @@ let view model dispatch =
                             (* Task 4.6 WEATHER: Generate the view code for the weather tile
                                using the weatherTile function, supplying the weather report
                                from the model, and include it here as part of the list *)
+                            weatherTile model.Weather
                         ]
                         Tile.parent [ Tile.Size Tile.Is8 ] [
                             crimeTile model.Crimes
                         ]                   
-                  ]        
+                  ]
         ]
 
         br [ ]

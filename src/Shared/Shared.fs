@@ -31,8 +31,12 @@ type WeatherType =
         match this with
         | Snow -> "sn" | Sleet -> "s" | Hail -> "h" | Thunder -> "t" | HeavyRain -> "hr"
         | LightRain -> "lr" | Showers -> "s" | HeavyCloud -> "hc" | LightCloud -> "lc" | Clear -> "c"
+        //| _ -> "Unknown"
 
 type WeatherResponse = { WeatherType : WeatherType; AverageTemperature : float }
+
+type PostcodeRequest = { PostCode : string }
+
 
 /// Provides validation on data. Shared across both client and server.
 module Validation =
